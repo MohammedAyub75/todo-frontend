@@ -1,0 +1,67 @@
+/* ── Google Fonts ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Design Tokens ────────────────────────────────────────────────────────── */
+:root, [data-theme="dark"] {
+  --bg:           #0d0f14;
+  --nav-bg:       rgba(13, 15, 20, 0.85);
+  --card-bg:      #161a23;
+  --input-bg:     #1d2130;
+  --hover-bg:     #1d2130;
+  --selected-bg:  rgba(59, 130, 246, 0.08);
+  --border:       rgba(255, 255, 255, 0.08);
+  --shadow:       rgba(0, 0, 0, 0.4);
+
+  --text-primary:   #f0f2f8;
+  --text-secondary: #9aa3b8;
+  --text-muted:     #5a6480;
+
+  --accent-blue:   #3b82f6;
+  --accent-green:  #22c55e;
+  --accent-amber:  #f59e0b;
+  --accent-purple: #a78bfa;
+}
+
+[data-theme="light"] {
+  --bg:           #f4f6fb;
+  --nav-bg:       rgba(244, 246, 251, 0.85);
+  --card-bg:      #ffffff;
+  --input-bg:     #f4f6fb;
+  --hover-bg:     #eef1f8;
+  --selected-bg:  rgba(59, 130, 246, 0.06);
+  --border:       rgba(0, 0, 0, 0.08);
+  --shadow:       rgba(0, 0, 0, 0.08);
+
+  --text-primary:   #0f1623;
+  --text-secondary: #4a5568;
+  --text-muted:     #9aa3b8;
+}
+
+/* ── Reset & Base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  font-family: 'Sora', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+input, textarea, select, button {
+  font-family: inherit;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Selection ────────────────────────────────────────────────────────────── */
+::selection { background: rgba(59, 130, 246, 0.3); }
