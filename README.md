@@ -1,6 +1,25 @@
 # TaskFlow — Angular 19 Frontend
 
-A modern, production-grade Todo frontend application built with **Angular 19** and **NgRx Signal Store**, connected to your Spring Boot REST API.
+A modern, production-grade Todo frontend built with **Angular 19** and **NgRx Signal Store**, connected to your Spring Boot REST API.
+
+---
+
+## Quick Start
+
+```bash
+# 1. Install dependencies
+cd todo-frontend
+npm install
+
+# 2. Make sure Spring Boot is running on :8080 first
+#    (run .\run.cmd in your todo-app folder)
+
+# 3. Start the dev server
+npm start
+# → App opens at http://localhost:4200
+```
+
+> All `/api/*` requests are automatically proxied to `localhost:8080` — no CORS issues.
 
 ---
 
@@ -8,33 +27,12 @@ A modern, production-grade Todo frontend application built with **Angular 19** a
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Angular | 19.2 | Framework (standalone components, signals) |
-| NgRx Signals | 19.0 | Signal Store for state management |
+| Angular | 19.2 | Framework |
+| NgRx Signals | 19.0 | State management |
 | TypeScript | 5.7 | Type safety |
-| RxJS | 7.8 | Async operations inside the store |
-| SCSS | — | Styling with CSS custom properties |
+| RxJS | 7.8 | Async in the store |
+| SCSS | — | Styling + CSS variables |
 | Angular CLI | 19.2 | Build tooling |
-
----
-
-## Quick Start
-
-```bash
-# 1. Go into the project
-cd todo-frontend
-
-# 2. Install dependencies
-npm install
-
-# 3. Make sure your Spring Boot backend is running on :8080
-# .\run.cmd   (in your todo-app folder)
-
-# 4. Start the Angular dev server
-npm start
-# → App opens at http://localhost:4200
-```
-
-The `--proxy-config proxy.conf.json` flag in the start script forwards all `/api/*` requests from port 4200 to your Spring Boot server at `localhost:8080`, avoiding CORS issues entirely.
 
 ---
 
@@ -44,9 +42,9 @@ The `--proxy-config proxy.conf.json` flag in the start script forwards all `/api
 src/app/
 ├── core/
 │   ├── models/
-│   │   └── todo.model.ts          # TypeScript interfaces for all API types
+│   │   └── todo.model.ts          # TypeScript interfaces (Todo, PagedResponse, etc.)
 │   └── services/
-│       └── todo.service.ts        # HTTP service — thin wrapper over the REST API
+│       └── todo.service.ts        # HTTP calls — thin wrapper over the REST API
 │
 ├── features/
 │   └── todos/
@@ -54,159 +52,169 @@ src/app/
 │       │   └── todo.store.ts      # ★ NgRx Signal Store — all state lives here
 │       └── components/
 │           ├── todo-list/         # Main page container
-│           ├── todo-card/         # Single task card (input signals)
-│           ├── todo-form/         # Create/edit modal
+│           ├── todo-card/         # Single task row
+│           ├── todo-form/         # Create / edit modal
 │           ├── todo-filters/      # Search + filter bar
-│           └── todo-stats/        # Stats summary cards
+│           └── todo-stats/        # 4 stat cards at the top
 │
-└── app.component.ts               # Root shell with theme toggle
+├── app.component.ts               # Root shell + dark/light theme toggle
+├── app.config.ts                  # Angular providers (HttpClient, Router, etc.)
+└── main.ts                        # Bootstrap entry point
 ```
 
 ---
 
-## NgRx Signal Store — Explained
+## NgRx Signal Store — Core Concepts
 
-This is the core architectural concept. The store replaces Redux boilerplate with a clean, signal-based API.
+The Signal Store is the heart of the app. It replaces Redux's actions/reducers/effects boilerplate with a clean, signal-based API in a single file.
 
-### What is a Signal Store?
+### Store Structure
 
 ```typescript
 export const TodoStore = signalStore(
-  { providedIn: 'root' },   // Injectable as a singleton service
+  { providedIn: 'root' },    // singleton service, inject anywhere
 
-  withState(initialState),   // State becomes individual signals
-  withComputed((store) => ({ /* derived signals */ })),
-  withProps(() => ({ /* injected services */ })),
-  withMethods((store) => ({ /* actions + side effects */ })),
+  withState(initialState),   // every property becomes a signal
+  withComputed((store) => ({ /* derived/memoized signals */ })),
+  withProps(() => ({ todoService: inject(TodoService) })),
+  withMethods((store) => ({ /* actions + async effects */ })),
 );
-```
-
-Every piece of state automatically becomes a **signal** you can read in templates:
-```typescript
-store.todos()          // Signal<Todo[]>
-store.loading()        // Signal<boolean>
-store.stats()          // Signal<TodoStats>
-store.completionPercent() // computed Signal<number>
 ```
 
 ### withState — Reactive State
 
+Each property in `withState` automatically becomes a **signal** you read with `()`:
+
 ```typescript
 withState({
-  todos: [],
-  loading: false,
-  filter: { page: 0, size: 10, ... },
-  selectedIds: [],
-  // ...
+  todos: [],        // → store.todos()
+  loading: false,   // → store.loading()
+  selectedIds: [],  // → store.selectedIds()
+  filter: { ... },  // → store.filter()
 })
 ```
 
-Angular automatically re-renders only the components that read a signal that changed. No manual `markForCheck()` needed.
+Angular re-renders only the components that read a signal that changed. No manual `markForCheck()` needed.
 
-### withComputed — Derived Signals
+To update state, use `patchState` — it merges partial updates:
 
-Computed signals are memoized — they only recalculate when their dependencies change:
+```typescript
+patchState(store, { loading: true });
+patchState(store, { todos: page.content, loading: false });
+```
+
+### withComputed — Derived Signals (Memoized)
+
+Computed signals recalculate **only when their dependencies change**, like a spreadsheet formula:
 
 ```typescript
 withComputed((store) => ({
-  completionPercent: computed(() =>
-    store.stats().total === 0 ? 0
-    : Math.round((store.stats().completed / store.stats().total) * 100)
-  ),
+  completionPercent: computed(() => {
+    const total = store.stats().total;
+    return total === 0 ? 0 : Math.round((store.stats().completed / total) * 100);
+  }),
   isEmpty: computed(() => !store.loading() && store.todos().length === 0),
+  hasSelection: computed(() => store.selectedIds().length > 0),
+  allSelected: computed(() =>
+    store.todos().length > 0 && store.selectedIds().length === store.todos().length
+  ),
 }))
 ```
 
 ### withMethods — Actions
 
-Methods are how you change state. Simple mutations use `patchState`:
+Two kinds of methods live here:
 
+**1. Synchronous — use `patchState` directly:**
 ```typescript
-toggleComplete(todo: Todo): void {
-  store.patchTodo({ id: todo.id, changes: { completed: !todo.completed } });
-}
+toggleSelection(id: number): void {
+  const current = store.selectedIds();
+  const updated = current.includes(id)
+    ? current.filter(sid => sid !== id)
+    : [...current, id];
+  patchState(store, { selectedIds: updated });
+},
 ```
 
-### rxMethod — Async Operations
-
-For HTTP calls, `rxMethod` bridges RxJS into the signal world. It handles subscriptions automatically:
-
+**2. Async HTTP — use `rxMethod`:**
 ```typescript
 loadTodos: rxMethod<TodoFilter>(
   pipe(
     tap(() => patchState(store, { loading: true })),
-    debounceTime(150),
-    switchMap((filter) =>
+    debounceTime(150),          // wait 150ms before firing
+    switchMap((filter) =>       // cancel previous request if filter changes
       todoService.getAll(filter).pipe(
         tapResponse({
           next: (page) => patchState(store, { todos: page.content, loading: false }),
-          error: (err) => patchState(store, { error: err.message, loading: false }),
+          error: (err: Error) => patchState(store, { error: err.message, loading: false }),
         })
       )
     )
   )
-)
+),
 ```
 
-Key points:
-- `switchMap` cancels the previous request if a new filter arrives (handles race conditions)
-- `debounceTime` prevents hitting the API on every keystroke
-- `tapResponse` is NgRx's safe version of `tap` that always handles both success and error
-- The subscription is **automatically cleaned up** when the store is destroyed
-
-### withProps — Dependency Injection
-
-Services are injected cleanly using `withProps`:
-
-```typescript
-withProps(() => ({
-  todoService: inject(TodoService),  // injected once, reused in all methods
-}))
-```
+**Why `rxMethod` instead of `async/await`?**
+- `switchMap` automatically cancels stale HTTP requests (race-condition safe)
+- Subscriptions are cleaned up automatically when the store is destroyed
+- `debounceTime` prevents hammering the API on rapid filter changes
+- `tapResponse` always handles both success and error paths
 
 ---
 
-## Component Architecture
+## Component Patterns
 
 ### Standalone Components (no NgModules)
 
-Every component is standalone — Angular 19 fully embraces this:
+Every component is standalone — Angular 19 fully embraces this model:
 
 ```typescript
 @Component({
   selector: 'app-todo-card',
-  standalone: true,           // no NgModule needed
-  imports: [FormsModule],     // import only what you need
-  changeDetection: ChangeDetectionStrategy.OnPush, // best practice
+  standalone: true,
+  imports: [FormsModule],                          // import only what you need
+  changeDetection: ChangeDetectionStrategy.OnPush, // only re-render when signals change
 })
 ```
 
-`OnPush` means Angular only re-renders a component when:
-1. An `@Input` signal/reference changes
-2. An event fires inside the component
-3. A signal it reads changes
+`OnPush` + signals = near-zero unnecessary renders.
 
-This gives excellent performance.
+### Injecting the Store
+
+```typescript
+export class TodoListComponent {
+  protected readonly store = inject(TodoStore); // inject() instead of constructor
+}
+```
+
+In the template, just call signals as functions:
+```html
+@if (store.loading()) { ... }
+@for (todo of store.todos(); track todo.id) { ... }
+{{ store.completionPercent() }}%
+```
 
 ### Input Signals (Angular 19)
 
 ```typescript
-// Modern way — input signals replace @Input() decorator
+// Modern signal-based input — replaces @Input() decorator
 readonly todo = input.required<Todo>();
 
-// In template
-{{ todo().title }}
+// Computed from that input
+protected isSelected = computed(() =>
+  this.store.selectedIds().includes(this.todo().id)
+);
 ```
 
-### Control Flow Syntax (@if, @for)
+### Built-in Control Flow
 
-Angular 19 uses built-in control flow instead of `*ngIf` and `*ngFor`:
+Angular 19 uses `@if` / `@for` / `@else` instead of `*ngIf` and `*ngFor`:
 
 ```html
 @if (store.loading()) {
   <div class="skeleton"></div>
 } @else if (store.isEmpty()) {
-  <div class="empty-state">No tasks</div>
+  <div class="empty-state">No tasks yet</div>
 } @else {
   @for (todo of store.todos(); track todo.id) {
     <app-todo-card [todo]="todo" />
@@ -214,50 +222,50 @@ Angular 19 uses built-in control flow instead of `*ngIf` and `*ngFor`:
 }
 ```
 
-`track todo.id` tells Angular how to identify items for efficient DOM updates.
+`track todo.id` tells Angular how to identity items — enables efficient DOM patching instead of re-rendering the whole list.
 
 ---
 
 ## Features
 
-| Feature | Where |
+| Feature | How to use |
 |---|---|
-| Create task | "New Task" button → form modal |
-| Edit task | ✏️ button on any card → same form modal pre-filled |
-| Delete task | 🗑️ button on any card |
-| Toggle complete | ⭕/✅ button on any card |
-| Bulk complete | Select multiple → "Complete X selected" |
-| Select all | Checkbox in the select bar |
-| Filter by status | All / Active / Done buttons |
-| Filter by priority | Any / High / Med / Low buttons |
-| Search | Debounced 400ms search box |
+| Create task | "New Task" button → modal form |
+| Edit task | ✏️ icon on a card → same modal pre-filled |
+| Delete task | 🗑️ icon on a card |
+| Toggle complete | ⭕/✅ button on a card |
+| Bulk complete | Check multiple cards → "Complete X selected" |
+| Select all | Indeterminate checkbox in the select bar |
+| Filter by status | All / Active / Done filter buttons |
+| Filter by priority | Any / High / Med / Low filter buttons |
+| Search | Debounced search box (400ms) |
 | Sort | Dropdown: newest, updated, title, priority |
-| Pagination | Bottom page buttons |
-| Stats | 4 stat cards at the top with live progress bar |
-| Dark/Light theme | 🌙/☀️ toggle in nav, persisted to localStorage |
-| Skeleton loading | Animated skeletons while fetching |
-| Error handling | Error banner with dismiss button |
+| Pagination | Page buttons at the bottom |
+| Stats | Live stat cards with animated progress bar |
+| Dark / Light theme | 🌙 / ☀️ toggle in the nav (saved to localStorage) |
+| Skeleton loading | Shimmer placeholders while fetching |
+| Error handling | Dismissable error banner |
 
 ---
 
 ## API Mapping
 
-| UI Action | API Call |
+| UI Action | HTTP Call |
 |---|---|
-| Load list | `GET /api/v1/todos?page=&size=&sortBy=&direction=&completed=&priority=` |
+| Load todo list | `GET /api/v1/todos?page=&size=&sortBy=&direction=&completed=&priority=` |
 | Search | `GET /api/v1/todos/search?q=` |
-| Load stats | `GET /api/v1/todos/stats` |
-| Create | `POST /api/v1/todos` |
-| Edit (full) | `PUT /api/v1/todos/{id}` |
+| Stats cards | `GET /api/v1/todos/stats` |
+| Create task | `POST /api/v1/todos` |
+| Edit task (full replace) | `PUT /api/v1/todos/{id}` |
 | Toggle / partial edit | `PATCH /api/v1/todos/{id}` |
-| Delete | `DELETE /api/v1/todos/{id}` |
+| Delete task | `DELETE /api/v1/todos/{id}` |
 | Bulk complete | `POST /api/v1/todos/bulk-complete` |
 
 ---
 
 ## Proxy Configuration
 
-`proxy.conf.json` tells the Angular dev server to forward API requests:
+`proxy.conf.json` tells the Angular dev server to forward API requests to Spring Boot:
 
 ```json
 {
@@ -269,20 +277,20 @@ Angular 19 uses built-in control flow instead of `*ngIf` and `*ngFor`:
 }
 ```
 
-When you call `/api/v1/todos` from Angular, it goes to `http://localhost:8080/api/v1/todos`. In production, configure your web server (Nginx, etc.) to do the same.
+When your code calls `/api/v1/todos`, the dev server rewrites it to `http://localhost:8080/api/v1/todos`. In production, configure Nginx or Apache to do the same, or serve the Angular build directly from Spring Boot's `static/` folder.
 
 ---
 
 ## Theme System
 
-Themes use CSS custom properties toggled via a `data-theme` attribute:
+Themes are driven by a `data-theme` attribute on the root element and CSS custom properties:
 
 ```scss
 [data-theme="dark"]  { --bg: #0d0f14; --card-bg: #161a23; ... }
 [data-theme="light"] { --bg: #f4f6fb; --card-bg: #ffffff; ... }
 ```
 
-The `AppComponent` reads from `localStorage` and toggles the attribute. Every component inherits the right colors automatically.
+`AppComponent` toggles the attribute and persists the choice to `localStorage`. Every component automatically gets the right colors without any extra work.
 
 ---
 
@@ -290,23 +298,24 @@ The `AppComponent` reads from `localStorage` and toggles the attribute. Every co
 
 ```bash
 npm run build:prod
+# Output → dist/todo-frontend/
 ```
 
-Output goes to `dist/todo-frontend/`. Serve it with any static file server or copy it into your Spring Boot `src/main/resources/static/` folder to serve the whole app from one process.
+To serve from Spring Boot, copy the contents of `dist/todo-frontend/browser/` into `src/main/resources/static/` and rebuild the JAR. Spring Boot will serve the Angular app alongside the API.
 
 ---
 
-## Angular 19 Best Practices Used
+## Angular 19 Best Practices Applied
 
-- ✅ Standalone components everywhere (no NgModules)
+- ✅ Standalone components — no NgModules anywhere
 - ✅ `OnPush` change detection on every component
-- ✅ Signal Store for all state (no subjects/BehaviorSubjects)
+- ✅ NgRx Signal Store — replaces services-with-subjects entirely
 - ✅ `input()` signal API instead of `@Input()` decorator
-- ✅ `@if` / `@for` built-in control flow instead of structural directives
 - ✅ `inject()` function instead of constructor injection
-- ✅ `rxMethod` for HTTP with automatic subscription cleanup
-- ✅ `tapResponse` for safe error handling in effects
-- ✅ `debounceTime` + `switchMap` for search (cancels stale requests)
-- ✅ `computed()` signals for derived state (memoized)
+- ✅ `@if` / `@for` built-in control flow
+- ✅ `rxMethod` for HTTP — auto subscription cleanup + race-condition safety
+- ✅ `tapResponse` for safe error handling in async methods
+- ✅ `debounceTime` + `switchMap` for search
+- ✅ `computed()` signals for all derived state
 - ✅ `track` in `@for` loops for efficient DOM reconciliation
-- ✅ Proxy config to avoid CORS in development
+- ✅ Proxy config — no CORS configuration needed
