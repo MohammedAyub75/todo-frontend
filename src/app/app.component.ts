@@ -113,6 +113,7 @@ export class AppComponent implements OnInit {
 
   ngOnInit(): void {
     this.store.initialize();
+    this.store.loadStats(undefined);
   }
 
   toggleTheme(): void {

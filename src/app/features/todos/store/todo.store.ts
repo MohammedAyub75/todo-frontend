@@ -8,8 +8,8 @@ import {
   withState,
 } from '@ngrx/signals';
 import { rxMethod } from '@ngrx/signals/rxjs-interop';
+import { tapResponse } from '@ngrx/operators';
 import { debounceTime, distinctUntilChanged, pipe, switchMap, tap } from 'rxjs';
-import { catchError, EMPTY } from 'rxjs';
 import { PagedResponse, Todo, TodoFilter, TodoStats } from '../../../core/models/todo.model';
 import { TodoService } from '../../../core/services/todo.service';
 
@@ -80,39 +80,34 @@ export const TodoStore = signalStore(
   // ── Methods ──────────────────────────────────────────────────────────────────
   withMethods((store) => {
 
-    // Private helpers (not exposed on store, just closures)
-    const refreshStats = () =>
-      store._svc.getStats().pipe(catchError(() => EMPTY)).subscribe(
-        (stats: TodoStats) => patchState(store, { stats }),
-      );
+    // Private closures — reusable logic shared across methods
+    const svc = store._svc;
 
-    const fetchTodos = (filter: TodoFilter) => {
-      const obs = filter.search
-        ? store._svc.search(filter.search, filter.page, filter.size)
-        : store._svc.getAll(filter);
-      return obs;
-    };
+    const todosQuery = (filter: TodoFilter) =>
+      filter.search
+        ? svc.search(filter.search, filter.page, filter.size)
+        : svc.getAll(filter);
+
+    const setTodosPage = (page: PagedResponse<Todo>) =>
+      patchState(store, {
+        todos: page.content,
+        totalElements: page.totalElements,
+        totalPages: page.totalPages,
+        loading: false,
+      });
 
     return {
 
-      // ── Load todos (reactive to filter) ───────────────────────────────────
+      // ── Load todos ────────────────────────────────────────────────────────
       loadTodos: rxMethod<TodoFilter>(
         pipe(
           tap(() => patchState(store, { loading: true, error: null })),
           debounceTime(150),
           switchMap((filter) =>
-            fetchTodos(filter).pipe(
-              tap((page: PagedResponse<Todo>) =>
-                patchState(store, {
-                  todos: page.content,
-                  totalElements: page.totalElements,
-                  totalPages: page.totalPages,
-                  loading: false,
-                }),
-              ),
-              catchError((err: Error) => {
-                patchState(store, { error: err.message, loading: false });
-                return EMPTY;
+            todosQuery(filter).pipe(
+              tapResponse({
+                next: setTodosPage,
+                error: (err: Error) => patchState(store, { error: err.message, loading: false }),
               }),
             ),
           ),
@@ -123,9 +118,11 @@ export const TodoStore = signalStore(
       loadStats: rxMethod<void>(
         pipe(
           switchMap(() =>
-            store._svc.getStats().pipe(
-              tap((stats: TodoStats) => patchState(store, { stats })),
-              catchError(() => EMPTY),
+            svc.getStats().pipe(
+              tapResponse({
+                next: (stats: TodoStats) => patchState(store, { stats }),
+                error: () => {},
+              }),
             ),
           ),
         ),
@@ -136,19 +133,15 @@ export const TodoStore = signalStore(
         pipe(
           tap(() => patchState(store, { saving: true, error: null })),
           switchMap((request) =>
-            store._svc.create(request).pipe(
-              tap((todo: Todo) => {
-                patchState(store, {
+            svc.create(request).pipe(
+              tapResponse({
+                next: (todo: Todo) => patchState(store, {
                   todos: [todo, ...store.todos()],
+                  totalElements: store.totalElements() + 1,
                   saving: false,
                   showForm: false,
-                  totalElements: store.totalElements() + 1,
-                });
-                refreshStats();
-              }),
-              catchError((err: Error) => {
-                patchState(store, { error: err.message, saving: false });
-                return EMPTY;
+                }),
+                error: (err: Error) => patchState(store, { error: err.message, saving: false }),
               }),
             ),
           ),
@@ -159,18 +152,14 @@ export const TodoStore = signalStore(
       patchTodo: rxMethod<{ id: number; changes: Partial<Pick<Todo, 'title' | 'description' | 'completed' | 'priority'>> }>(
         pipe(
           switchMap(({ id, changes }) =>
-            store._svc.patch(id, changes).pipe(
-              tap((updated: Todo) => {
-                patchState(store, {
+            svc.patch(id, changes).pipe(
+              tapResponse({
+                next: (updated: Todo) => patchState(store, {
                   todos: store.todos().map((t) => (t.id === updated.id ? updated : t)),
                   editingTodo: null,
                   saving: false,
-                });
-                refreshStats();
-              }),
-              catchError((err: Error) => {
-                patchState(store, { error: err.message, saving: false });
-                return EMPTY;
+                }),
+                error: (err: Error) => patchState(store, { error: err.message, saving: false }),
               }),
             ),
           ),
@@ -178,33 +167,33 @@ export const TodoStore = signalStore(
       ),
 
       // ── Toggle complete ───────────────────────────────────────────────────
-      toggleComplete(todo: Todo): void {
-        store._svc.patch(todo.id, { completed: !todo.completed }).pipe(
-          catchError(() => EMPTY),
-        ).subscribe((updated: Todo) => {
-          patchState(store, {
-            todos: store.todos().map((t) => (t.id === updated.id ? updated : t)),
-          });
-          refreshStats();
-        });
-      },
+      toggleComplete: rxMethod<Todo>(
+        pipe(
+          switchMap((todo) =>
+            svc.patch(todo.id, { completed: !todo.completed }).pipe(
+              tapResponse({
+                next: (updated: Todo) => patchState(store, {
+                  todos: store.todos().map((t) => (t.id === updated.id ? updated : t)),
+                }),
+                error: (err: Error) => patchState(store, { error: err.message }),
+              }),
+            ),
+          ),
+        ),
+      ),
 
       // ── Delete ────────────────────────────────────────────────────────────
       deleteTodo: rxMethod<number>(
         pipe(
           switchMap((id) =>
-            store._svc.delete(id).pipe(
-              tap(() => {
-                patchState(store, {
+            svc.delete(id).pipe(
+              tapResponse({
+                next: () => patchState(store, {
                   todos: store.todos().filter((t) => t.id !== id),
                   selectedIds: store.selectedIds().filter((sid) => sid !== id),
                   totalElements: store.totalElements() - 1,
-                });
-                refreshStats();
-              }),
-              catchError((err: Error) => {
-                patchState(store, { error: err.message });
-                return EMPTY;
+                }),
+                error: (err: Error) => patchState(store, { error: err.message }),
               }),
             ),
           ),
@@ -215,89 +204,90 @@ export const TodoStore = signalStore(
       bulkComplete: rxMethod<void>(
         pipe(
           switchMap(() =>
-            store._svc.bulkComplete(store.selectedIds()).pipe(
-              tap(() => {
-                const ids = store.selectedIds();
-                patchState(store, {
+            svc.bulkComplete(store.selectedIds()).pipe(
+              tapResponse({
+                next: () => patchState(store, {
                   todos: store.todos().map((t) =>
-                    ids.includes(t.id) ? { ...t, completed: true } : t,
+                    store.selectedIds().includes(t.id) ? { ...t, completed: true } : t,
                   ),
                   selectedIds: [],
-                });
-                refreshStats();
-              }),
-              catchError((err: Error) => {
-                patchState(store, { error: err.message });
-                return EMPTY;
+                }),
+                error: (err: Error) => patchState(store, { error: err.message }),
               }),
             ),
           ),
         ),
       ),
 
-      // ── Filter methods ────────────────────────────────────────────────────
-      setFilter(partial: Partial<TodoFilter>): void {
-        const updated = { ...store.filter(), ...partial, page: 0 };
-        patchState(store, { filter: updated, selectedIds: [] });
-        // Trigger load via rxMethod by calling it directly
-        store._svc.getAll(updated).pipe(
-          catchError(() => EMPTY),
-        ).subscribe((page: PagedResponse<Todo>) => {
-          patchState(store, {
-            todos: page.content,
-            totalElements: page.totalElements,
-            totalPages: page.totalPages,
-          });
-        });
-      },
+      // ── Set filter (status / priority / sort) ─────────────────────────────
+      setFilter: rxMethod<Partial<TodoFilter>>(
+        pipe(
+          tap((partial) => patchState(store, {
+            filter: { ...store.filter(), ...partial, page: 0 },
+            selectedIds: [],
+            loading: true,
+          })),
+          switchMap(() =>
+            todosQuery(store.filter()).pipe(
+              tapResponse({
+                next: setTodosPage,
+                error: (err: Error) => patchState(store, { error: err.message, loading: false }),
+              }),
+            ),
+          ),
+        ),
+      ),
 
+      // ── Search (debounced) ────────────────────────────────────────────────
       setSearch: rxMethod<string>(
         pipe(
           debounceTime(400),
           distinctUntilChanged(),
-          tap((search: string) => {
-            const updated = { ...store.filter(), search: search || undefined, page: 0 };
-            patchState(store, { filter: updated, loading: true });
-            const obs = search
-              ? store._svc.search(search, 0, store.filter().size)
-              : store._svc.getAll(updated);
-            obs.pipe(catchError(() => EMPTY)).subscribe((page: PagedResponse<Todo>) => {
-              patchState(store, {
-                todos: page.content,
-                totalElements: page.totalElements,
-                totalPages: page.totalPages,
-                loading: false,
-              });
-            });
-          }),
+          tap((search) => patchState(store, {
+            filter: { ...store.filter(), search: search || undefined, page: 0 },
+            loading: true,
+          })),
+          switchMap(() =>
+            todosQuery(store.filter()).pipe(
+              tapResponse({
+                next: setTodosPage,
+                error: (err: Error) => patchState(store, { error: err.message, loading: false }),
+              }),
+            ),
+          ),
         ),
       ),
 
-      goToPage(page: number): void {
-        const updated = { ...store.filter(), page };
-        patchState(store, { filter: updated, loading: true });
-        fetchTodos(updated).pipe(catchError(() => EMPTY)).subscribe((p: PagedResponse<Todo>) => {
-          patchState(store, {
-            todos: p.content,
-            totalElements: p.totalElements,
-            totalPages: p.totalPages,
-            loading: false,
-          });
-        });
-      },
+      // ── Pagination ────────────────────────────────────────────────────────
+      goToPage: rxMethod<number>(
+        pipe(
+          tap((page) => patchState(store, {
+            filter: { ...store.filter(), page },
+            loading: true,
+          })),
+          switchMap(() =>
+            todosQuery(store.filter()).pipe(
+              tapResponse({
+                next: setTodosPage,
+                error: (err: Error) => patchState(store, { error: err.message, loading: false }),
+              }),
+            ),
+          ),
+        ),
+      ),
 
       // ── Selection ─────────────────────────────────────────────────────────
       toggleSelection(id: number): void {
-        const current = store.selectedIds();
-        const updated = current.includes(id)
-          ? current.filter((sid) => sid !== id)
-          : [...current, id];
-        patchState(store, { selectedIds: updated });
+        const ids = store.selectedIds();
+        patchState(store, {
+          selectedIds: ids.includes(id) ? ids.filter((s) => s !== id) : [...ids, id],
+        });
       },
 
       toggleSelectAll(): void {
-        const allIds = store.todos().map((t) => t.id);
-        patchState(store, { selectedIds: store.allSelected() ? [] : allIds });
+        patchState(store, {
+          selectedIds: store.allSelected() ? [] : store.todos().map((t) => t.id),
+        });
       },
 
       clearSelection(): void {
@@ -322,19 +312,20 @@ export const TodoStore = signalStore(
       },
 
       // ── Bootstrap ─────────────────────────────────────────────────────────
-      initialize(): void {
-        const filter = store.filter();
-        patchState(store, { loading: true });
-        fetchTodos(filter).pipe(catchError(() => EMPTY)).subscribe((page: PagedResponse<Todo>) => {
-          patchState(store, {
-            todos: page.content,
-            totalElements: page.totalElements,
-            totalPages: page.totalPages,
-            loading: false,
-          });
-        });
-        refreshStats();
-      },
+      initialize: rxMethod<void>(
+        pipe(
+          tap(() => patchState(store, { loading: true })),
+          switchMap(() =>
+            todosQuery(store.filter()).pipe(
+              tapResponse({
+                next: setTodosPage,
+                error: (err: Error) => patchState(store, { error: err.message, loading: false }),
+              }),
+            ),
+          ),
+        ),
+      ),
+
     };
   }),
 );
